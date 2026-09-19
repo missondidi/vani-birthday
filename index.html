@@ -39,6 +39,9 @@ footer{text-align:center;padding:35px;font:13px Arial;color:#987d94}
 .quiz-next{margin-top:20px}
 .quiz-score{font:bold 18px Arial;color:#9b4f83}
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 </head>
 <body>
 <section class="hero">
@@ -57,6 +60,30 @@ footer{text-align:center;padding:35px;font:13px Arial;color:#987d94}
 </div>
 </section>
 
+<section class="section" id="hostArea" style="padding:25px;display:none">
+  <div class="wish-box" style="min-height:auto">
+    <div class="wisher">🔐 Host controls</div>
+    <div id="loginBox">
+      <input id="hostEmail" type="email" placeholder="Host email" style="padding:12px;border:1px solid #ead8e5;border-radius:12px;margin:5px;width:min(100%,280px)">
+      <input id="hostPassword" type="password" placeholder="Password" style="padding:12px;border:1px solid #ead8e5;border-radius:12px;margin:5px;width:min(100%,280px)">
+      <button class="btn" id="hostLogin">Login</button>
+      <div id="loginStatus" class="note"></div>
+    </div>
+    <div id="hostControls" style="display:none">
+      <div class="note" id="hostStatus">Host mode active</div>
+      <div class="controls">
+        <button class="control" id="hostPrevWish">‹</button>
+        <button class="control" id="hostNextWish">›</button>
+      </div>
+      <div class="controls">
+        <button class="btn" id="hostPrevQuiz">← Previous Question</button>
+        <button class="btn" id="hostNextQuiz">Next Question →</button>
+      </div>
+      <button class="btn" id="hostLogout" style="margin-top:15px;background:#76546f">Log out</button>
+    </div>
+  </div>
+</section>
+
 <section class="section" id="wishes">
 <h2>💌 Wishes for Vani</h2>
 <p class="subtitle">A little collection of love, laughter & wishes for your 20th 💗</p>
@@ -64,7 +91,7 @@ footer{text-align:center;padding:35px;font:13px Arial;color:#987d94}
 <div class="wisher" id="wisher"></div>
 <div class="wish" id="wish"></div>
 </div>
-<div class="controls"><button class="control" onclick="prevWish()">‹</button><button class="control" onclick="nextWish()">›</button></div>
+<div class="controls" id="viewerWishControls" style="display:none"></div>
 <div class="dots" id="dots"></div>
 <p class="note">Use the arrows to move through Vani's wishes at your own pace. ❤️</p>
 </section>
@@ -119,11 +146,111 @@ function nextWish(){index=(index+1)%wishes.length;render()}
 function prevWish(){index=(index-1+wishes.length)%wishes.length;render()}
 render();
 
+const firebaseConfig = {
+  apiKey: "AIzaSyCd5KSAHBw8XxJYcewAwFYFxVtee5Y-PmE",
+  authDomain: "vani-birthday-8c7f0.firebaseapp.com",
+  databaseURL: "https://vani-birthday-8c7f0-default-rtdb.firebaseio.com",
+  projectId: "vani-birthday-8c7f0",
+  storageBucket: "vani-birthday-8c7f0.firebasestorage.app",
+  messagingSenderId: "488442739145",
+  appId: "1:488442739145:web:00b1109ac0dc92c6611018"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.database();
+const room = db.ref('rooms/vani2026');
+const HOST_UID = '9QYKGEucaBYkwRIVrZWldgaDMP33';
+let hostSignedIn = false;
+let localQuizAnswered = false;
+
+function setWish(i){
+  index = ((Number(i)||0) + wishes.length) % wishes.length;
+  render();
+  localQuizAnswered = false;
+}
+
+function setQuiz(i){
+  quizIndex = Math.max(0, Math.min(quizQuestions.length-1, Number(i)||0));
+  localQuizAnswered = false;
+  renderQuiz();
+}
+
+function updateHostUI(){
+  const area=document.getElementById('hostArea');
+  const controls=document.getElementById('hostControls');
+  const login=document.getElementById('loginBox');
+  area.style.display='block';
+  controls.style.display=hostSignedIn?'block':'none';
+  login.style.display=hostSignedIn?'none':'block';
+  document.getElementById('hostStatus').textContent=hostSignedIn?'Host mode active — everyone sees your changes.':'Host mode active';
+}
+
+document.getElementById('hostLogin').addEventListener('click', async ()=>{
+  const email=document.getElementById('hostEmail').value.trim();
+  const password=document.getElementById('hostPassword').value;
+  const status=document.getElementById('loginStatus');
+  status.textContent='Logging in…';
+  try {
+    const cred=await auth.signInWithEmailAndPassword(email,password);
+    if(cred.user.uid!==HOST_UID){
+      await auth.signOut();
+      status.textContent='This account is not the host account.';
+      return;
+    }
+    status.textContent='';
+  } catch(e){ status.textContent='Login failed: '+(e.message||'check your email and password'); }
+});
+
+document.getElementById('hostLogout').addEventListener('click',()=>auth.signOut());
+document.getElementById('hostPrevWish').addEventListener('click',()=>room.child('currentWish').set((index-1+wishes.length)%wishes.length));
+document.getElementById('hostNextWish').addEventListener('click',()=>room.child('currentWish').set((index+1)%wishes.length));
+document.getElementById('hostPrevQuiz').addEventListener('click',()=>room.child('currentQuiz').set(Math.max(0,quizIndex-1)));
+document.getElementById('hostNextQuiz').addEventListener('click',()=>room.child('currentQuiz').set(Math.min(quizQuestions.length-1,quizIndex+1)));
+
+auth.onAuthStateChanged(async user=>{
+  hostSignedIn=!!user && user.uid===HOST_UID;
+  updateHostUI();
+  if(hostSignedIn){
+    const snap=await room.once('value');
+    const data=snap.val()||{};
+    if(data.currentWish===undefined) await room.child('currentWish').set(0);
+    if(data.currentQuiz===undefined) await room.child('currentQuiz').set(0);
+  }
+});
+
+room.child('currentWish').on('value',snap=>{
+  const v=snap.val();
+  if(v!==null && v!==undefined) setWish(v);
+});
+room.child('currentQuiz').on('value',snap=>{
+  const v=snap.val();
+  if(v!==null && v!==undefined) setQuiz(v);
+});
+
 const quizQuestions = [{question:"What is Vani didi's favourite series?",options:["👫 Friends","😂 Brooklyn 99","🪄 The One and Only Harry Potter","👨‍👩‍👦 Young Sheldon"],answer:1},{question:"What is Vani didi's favourite food?",options:["🍜 Ramen","🍝 Maggie","🥚 Eggs","🥟 Momos"],answer:2},{question:"Who is Vani didi's best friend?",options:["💖 Shelly","🌸 Gauri","🫶 Aashi","✨ Saumya"],answer:2},{question:"What is Vani didi's favourite drink?",options:["💧 Water","☕ Coffee","🥛 Milk","🥤 Sprite"],answer:0},{question:"What is Vani didi's favourite colour?",options:["🩷 Pink","💙 Blue","💜 Purple","💚 Green"],answer:3},{question:"What is Vani didi's favourite time?",options:["🌙 0–7","🌅 7–20","🌃 0–4","☀️ 13–20"],answer:0},{question:"What is Vani didi's favourite fruit?",options:["🍒 Lychee","🍓 Strawberry","🥑 Avocado","🍅 Tomato"],answer:2},{question:"What is Vani didi's favourite hobby?",options:["📱 Scrolling on phone","😴 Sleeping","🏃 Running 🤡","🐶 Panting"],answer:1}];
 let quizIndex=0, quizScore=0;
-function renderQuiz(){const q=quizQuestions[quizIndex];document.getElementById("quizQuestion").textContent=q.question;document.getElementById("quizOptions").innerHTML=q.options.map((o,i)=>`<button class="quiz-option" data-index="${i}">${String.fromCharCode(65+i)}) ${o}</button>`).join("");document.getElementById("quizFeedback").textContent="";document.getElementById("quizNext").style.display="none";document.getElementById("quizScore").textContent=`Score: ${quizScore} / ${quizIndex+1}`;document.querySelectorAll(".quiz-option").forEach(b=>b.addEventListener("click",()=>checkQuizAnswer(Number(b.dataset.index))))}
-function checkQuizAnswer(selected){const q=quizQuestions[quizIndex],buttons=document.querySelectorAll(".quiz-option");buttons.forEach(b=>b.disabled=true);buttons[q.answer].classList.add("correct");if(selected===q.answer){quizScore++;document.getElementById("quizFeedback").textContent="🎉 Correct! You really know Vani!"}else{buttons[selected].classList.add("wrong");document.getElementById("quizFeedback").textContent=`Oops! The correct answer is ${String.fromCharCode(65+q.answer)}) ${q.options[q.answer]}.`}document.getElementById("quizScore").textContent=`Score: ${quizScore} / ${quizIndex+1}`;document.getElementById("quizNext").style.display=quizIndex<quizQuestions.length-1?"inline-block":"none"}
-document.getElementById("quizNext").addEventListener("click",()=>{quizIndex++;renderQuiz()});renderQuiz();
+function renderQuiz(){
+ const q=quizQuestions[quizIndex];
+ document.getElementById('quizQuestion').textContent=q.question;
+ document.getElementById('quizOptions').innerHTML=q.options.map((o,i)=>`<button class="quiz-option" data-index="${i}">${String.fromCharCode(65+i)}) ${o}</button>`).join('');
+ document.getElementById('quizFeedback').textContent='';
+ document.getElementById('quizNext').style.display='none';
+ document.getElementById('quizScore').textContent=`Question ${quizIndex+1} of ${quizQuestions.length}`;
+ document.querySelectorAll('.quiz-option').forEach(b=>b.addEventListener('click',()=>checkQuizAnswer(Number(b.dataset.index))));
+ localQuizAnswered=false;
+}
+function checkQuizAnswer(selected){
+ if(localQuizAnswered)return;
+ localQuizAnswered=true;
+ const q=quizQuestions[quizIndex],buttons=document.querySelectorAll('.quiz-option');
+ buttons.forEach(b=>b.disabled=true);
+ buttons[q.answer].classList.add('correct');
+ if(selected===q.answer){quizScore++;document.getElementById('quizFeedback').textContent='🎉 Correct! You really know Vani!'}
+ else{buttons[selected].classList.add('wrong');document.getElementById('quizFeedback').textContent=`Oops! The correct answer is ${String.fromCharCode(65+q.answer)}) ${q.options[q.answer]}.`}
+ document.getElementById('quizScore').textContent=`Question ${quizIndex+1} of ${quizQuestions.length} • Your score: ${quizScore}`;
+}
+renderQuiz();
 </script>
 </body>
 </html>
